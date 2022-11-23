@@ -17,7 +17,9 @@ let package = Package(
   targets: [
     .target(
       name: "SnapshotTesting",
-      dependencies: []),
+      dependencies: [],
+      swiftSettings: [.unsafeFlags(["-O"], .when(configuration: .debug))]
+    ),
     .testTarget(
       name: "SnapshotTestingTests",
       dependencies: ["SnapshotTesting"]),
