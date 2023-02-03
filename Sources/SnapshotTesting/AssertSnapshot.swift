@@ -54,7 +54,7 @@ public func assertSnapshot<Value, Format>(
 
 @available(iOS 13.0.0, tvOS 13.0.0, *)
 public func assertSnapshot2<Value, Format>(
-  matching value: @autoclosure () throws -> Value,
+  matching value: @escaping @autoclosure () throws -> Value,
   as snapshotting: Snapshotting<Value, Format>,
   named name: String? = nil,
   record recording: Bool = false,
@@ -118,7 +118,7 @@ public func assertSnapshots<Value, Format>(
 
 @available(iOS 13.0.0, tvOS 13.0.0, *)
 public func assertSnapshots2<Value, Format>(
-  matching value: @autoclosure () throws -> Value,
+  matching value: @escaping @autoclosure () throws -> Value,
   as strategies: [String: Snapshotting<Value, Format>],
   record recording: Bool = false,
   timeout: TimeInterval = 5,
@@ -176,7 +176,7 @@ public func assertSnapshots<Value, Format>(
 
 @available(iOS 13.0.0, tvOS 13.0.0, *)
 public func assertSnapshots2<Value, Format>(
-  matching value: @autoclosure () throws -> Value,
+  matching value: @escaping @autoclosure () throws -> Value,
   as strategies: [Snapshotting<Value, Format>],
   record recording: Bool = false,
   timeout: TimeInterval = 5,
@@ -381,7 +381,7 @@ public func verifySnapshot<Value, Format>(
 
 @available(iOS 13.0.0, tvOS 13.0.0, *)
 public func verifySnapshot2<Value, Format>(
-  matching value: @autoclosure () throws -> Value,
+  matching value: @escaping @autoclosure () throws -> Value,
   as snapshotting: Snapshotting<Value, Format>,
   named name: String? = nil,
   record recording: Bool = false,
@@ -421,15 +421,17 @@ async throws -> String? {
 
 
     var diffable: Format = try await withCheckedThrowingContinuation { continuation in
-      do {
-        let value = try value()
-        snapshotting.snapshot(value).run { b in
-          continuation.resume(returning: b)
-        }
-      } catch {
-        continuation.resume(throwing: error)
-      }
+      DispatchQueue.main.async {
+        do {
 
+          let value = try value()
+          snapshotting.snapshot(value).run { b in
+            continuation.resume(returning: b)
+          }
+        } catch {
+          continuation.resume(throwing: error)
+        }
+      }
     }
 
 
