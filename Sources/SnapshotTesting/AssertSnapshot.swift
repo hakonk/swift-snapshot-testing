@@ -52,6 +52,36 @@ public func assertSnapshot<Value, Format>(
   XCTFail(message, file: file, line: line)
 }
 
+@available(iOS 13.0.0, tvOS 13.0.0, *)
+public func assertSnapshot2<Value, Format>(
+  matching value: @autoclosure () throws -> Value,
+  as snapshotting: Snapshotting<Value, Format>,
+  named name: String? = nil,
+  record recording: Bool = false,
+  timeout: TimeInterval = 5,
+  file: StaticString = #file,
+  testName: String = #function,
+  line: UInt = #line
+  ) async {
+
+    do {
+      let failure = try await verifySnapshot2(
+        matching: try value(),
+        as: snapshotting,
+        named: name,
+        record: recording,
+        timeout: timeout,
+        file: file,
+        testName: testName,
+        line: line
+      )
+      guard let message = failure else { return }
+      XCTFail(message, file: file, line: line)
+    } catch {
+      XCTFail(error.localizedDescription)
+    }
+}
+
 /// Asserts that a given value matches references on disk.
 ///
 /// - Parameters:
@@ -86,6 +116,31 @@ public func assertSnapshots<Value, Format>(
   }
 }
 
+@available(iOS 13.0.0, tvOS 13.0.0, *)
+public func assertSnapshots2<Value, Format>(
+  matching value: @autoclosure () throws -> Value,
+  as strategies: [String: Snapshotting<Value, Format>],
+  record recording: Bool = false,
+  timeout: TimeInterval = 5,
+  file: StaticString = #file,
+  testName: String = #function,
+  line: UInt = #line
+  ) async {
+
+    for (name, strategy) in strategies {
+      await assertSnapshot2(
+        matching: try value(),
+        as: strategy,
+        named: name,
+        record: recording,
+        timeout: timeout,
+        file: file,
+        testName: testName,
+        line: line
+      )
+    }
+}
+
 /// Asserts that a given value matches references on disk.
 ///
 /// - Parameters:
@@ -117,6 +172,29 @@ public func assertSnapshots<Value, Format>(
       line: line
     )
   }
+}
+
+@available(iOS 13.0.0, tvOS 13.0.0, *)
+public func assertSnapshots2<Value, Format>(
+  matching value: @autoclosure () throws -> Value,
+  as strategies: [Snapshotting<Value, Format>],
+  record recording: Bool = false,
+  timeout: TimeInterval = 5,
+  file: StaticString = #file,
+  testName: String = #function,
+  line: UInt = #line
+  ) async {
+    for strategy in strategies {
+      await assertSnapshot2(
+        matching: try value(),
+        as: strategy,
+        record: recording,
+        timeout: timeout,
+        file: file,
+        testName: testName,
+        line: line
+      )
+    }
 }
 
 /// Verifies that a given value matches a reference on disk.
