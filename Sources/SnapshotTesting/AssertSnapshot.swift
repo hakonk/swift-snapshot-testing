@@ -301,10 +301,149 @@ public func verifySnapshot<Value, Format>(
     }
 }
 
+@available(iOS 13.0.0, tvOS 13.0.0, *)
+public func verifySnapshot2<Value, Format>(
+  matching value: @autoclosure () throws -> Value,
+  as snapshotting: Snapshotting<Value, Format>,
+  named name: String? = nil,
+  record recording: Bool = false,
+  snapshotDirectory: String? = nil,
+  timeout: TimeInterval = 5,
+  file: StaticString = #file,
+  testName: String = #function,
+  line: UInt = #line
+  )
+async throws -> String? {
+
+  let recording = recording || isRecording
+
+  do {
+    let fileUrl = URL(fileURLWithPath: "\(file)", isDirectory: false)
+    let fileName = fileUrl.deletingPathExtension().lastPathComponent
+
+    let snapshotDirectoryUrl = snapshotDirectory.map { URL(fileURLWithPath: $0, isDirectory: true) }
+    ?? fileUrl
+      .deletingLastPathComponent()
+      .appendingPathComponent("__Snapshots__")
+      .appendingPathComponent(fileName)
+
+    let identifier: String
+    if let name = name {
+      identifier = sanitizePathComponent(name)
+    } else {
+      identifier = String(await counter.count(for: snapshotDirectoryUrl.appendingPathComponent(testName)))
+    }
+
+    let testName = sanitizePathComponent(testName)
+    let snapshotFileUrl = snapshotDirectoryUrl
+      .appendingPathComponent("\(testName).\(identifier)")
+      .appendingPathExtension(snapshotting.pathExtension ?? "")
+    let fileManager = FileManager.default
+    try fileManager.createDirectory(at: snapshotDirectoryUrl, withIntermediateDirectories: true)
+
+
+    var diffable: Format = try await withCheckedThrowingContinuation { continuation in
+      do {
+        let value = try value()
+        snapshotting.snapshot(value).run { b in
+          continuation.resume(returning: b)
+        }
+      } catch {
+        continuation.resume(throwing: error)
+      }
+
+    }
+
+
+    guard !recording, fileManager.fileExists(atPath: snapshotFileUrl.path) else {
+      try snapshotting.diffing.toData(diffable).write(to: snapshotFileUrl)
+      return recording
+      ? """
+            Record mode is on. Turn record mode off and re-run "\(testName)" to test against the newly-recorded snapshot.
+
+            open "\(snapshotFileUrl.path)"
+
+            Recorded snapshot: …
+            """
+      : """
+            No reference was found on disk. Automatically recorded snapshot: …
+
+            open "\(snapshotFileUrl.path)"
+
+            Re-run "\(testName)" to test against the newly-recorded snapshot.
+            """
+    }
+
+    let data = try Data(contentsOf: snapshotFileUrl)
+    let reference = snapshotting.diffing.fromData(data)
+
+#if os(iOS) || os(tvOS)
+    // If the image generation fails for the diffable part use the reference
+    if let localDiff = diffable as? UIImage, localDiff.size == .zero {
+      diffable = reference
+    }
+#endif
+
+    guard let (failure, attachments) = snapshotting.diffing.diff(reference, diffable) else {
+      return nil
+    }
+
+    let artifactsUrl = URL(
+      fileURLWithPath: ProcessInfo.processInfo.environment["SNAPSHOT_ARTIFACTS"] ?? NSTemporaryDirectory(), isDirectory: true
+    )
+    let artifactsSubUrl = artifactsUrl.appendingPathComponent(fileName)
+    try fileManager.createDirectory(at: artifactsSubUrl, withIntermediateDirectories: true)
+    let failedSnapshotFileUrl = artifactsSubUrl.appendingPathComponent(snapshotFileUrl.lastPathComponent)
+    try snapshotting.diffing.toData(diffable).write(to: failedSnapshotFileUrl)
+
+    if !attachments.isEmpty {
+#if !os(Linux)
+      if ProcessInfo.processInfo.environment.keys.contains("__XCODE_BUILT_PRODUCTS_DIR_PATHS") {
+        XCTContext.runActivity(named: "Attached Failure Diff") { activity in
+          attachments.forEach {
+            activity.add($0)
+          }
+        }
+      }
+#endif
+    }
+
+    let diffMessage = diffTool
+      .map { "\($0) \"\(snapshotFileUrl.path)\" \"\(failedSnapshotFileUrl.path)\"" }
+    ?? "@\(minus)\n\"\(snapshotFileUrl.path)\"\n@\(plus)\n\"\(failedSnapshotFileUrl.path)\""
+    return """
+      Snapshot does not match reference.
+
+      \(diffMessage)
+
+      \(failure.trimmingCharacters(in: .whitespacesAndNewlines))
+      """
+  } catch {
+    return error.localizedDescription
+  }
+}
+
 // MARK: - Private
 
 private let counterQueue = DispatchQueue(label: "co.pointfree.SnapshotTesting.counter")
 private var counterMap: [URL: Int] = [:]
+@available(iOS 13.0.0, tvOS 13.0.0, *)
+private let counter = Counter()
+
+@available(iOS 13.0.0, tvOS 13.0.0, *)
+fileprivate final actor Counter {
+  private var counterMap: [URL: Int] = [:]
+  func count(for url: URL) -> Int {
+    if let count = counterMap[url] {
+      let newCount = count + 1
+      counterMap[url] = newCount
+      return count
+    } else {
+      counterMap[url] = 1
+      return 0
+    }
+  }
+}
 
 func sanitizePathComponent(_ string: String) -> String {
   return string
