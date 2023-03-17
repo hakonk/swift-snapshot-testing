@@ -482,7 +482,10 @@ async throws -> String? {
       if ProcessInfo.processInfo.environment.keys.contains("__XCODE_BUILT_PRODUCTS_DIR_PATHS") {
         XCTContext.runActivity(named: "Attached Failure Diff") { activity in
           attachments.forEach {
-            activity.add($0)
+            guard let attachment = $0 as? XCTAttachment else {
+              fatalError("wrong type!")
+            }
+            activity.add(attachment)
           }
         }
       }
