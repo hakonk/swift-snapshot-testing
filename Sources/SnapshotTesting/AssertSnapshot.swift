@@ -53,7 +53,7 @@ public func assertSnapshot<Value, Format>(
 }
 
 @available(iOS 13.0.0, tvOS 13.0.0, *)
-public func assertSnapshot2<Value, Format>(
+public func assertSnapshotAsync<Value, Format>(
   matching value: @escaping @autoclosure () throws -> Value,
   as snapshotting: Snapshotting<Value, Format>,
   named name: String? = nil,
@@ -65,7 +65,7 @@ public func assertSnapshot2<Value, Format>(
   ) async {
 
     do {
-      let failure = try await verifySnapshot2(
+      let failure = try await verifySnapshotAsync(
         matching: try value(),
         as: snapshotting,
         named: name,
@@ -117,7 +117,7 @@ public func assertSnapshots<Value, Format>(
 }
 
 @available(iOS 13.0.0, tvOS 13.0.0, *)
-public func assertSnapshots2<Value, Format>(
+public func assertSnapshotsAsync<Value, Format>(
   matching value: @escaping @autoclosure () throws -> Value,
   as strategies: [String: Snapshotting<Value, Format>],
   record recording: Bool = false,
@@ -128,7 +128,7 @@ public func assertSnapshots2<Value, Format>(
   ) async {
 
     for (name, strategy) in strategies {
-      await assertSnapshot2(
+      await assertSnapshotAsync(
         matching: try value(),
         as: strategy,
         named: name,
@@ -185,7 +185,7 @@ public func assertSnapshots2<Value, Format>(
   line: UInt = #line
   ) async {
     for strategy in strategies {
-      await assertSnapshot2(
+      await assertSnapshotAsync(
         matching: try value(),
         as: strategy,
         record: recording,
@@ -380,7 +380,7 @@ public func verifySnapshot<Value, Format>(
 }
 
 @available(iOS 13.0.0, tvOS 13.0.0, *)
-public func verifySnapshot2<Value, Format>(
+public func verifySnapshotAsync<Value, Format>(
   matching value: @escaping @autoclosure () throws -> Value,
   as snapshotting: Snapshotting<Value, Format>,
   named name: String? = nil,
@@ -517,7 +517,7 @@ fileprivate final actor Counter {
     if let count = counterMap[url] {
       let newCount = count + 1
       counterMap[url] = newCount
-      return count
+      return newCount
     } else {
       counterMap[url] = 1
       return 0
