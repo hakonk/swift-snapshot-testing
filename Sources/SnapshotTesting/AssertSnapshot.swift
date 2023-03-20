@@ -65,6 +65,7 @@ public func assertSnapshotAsync<Value, Format>(
   ) async {
 
     do {
+      // autorelease pool around here?
       let failure = try await verifySnapshotAsync(
         matching: try value(),
         as: snapshotting,
@@ -380,6 +381,43 @@ public func verifySnapshot<Value, Format>(
     }
 }
 
+private func makeSnapshotDir(file: StaticString, snapshotDirectory: String?, name: String?, testName: String, pathExtension: String?) async throws -> (FileManager, URL, String) {
+  let fileUrl = URL(fileURLWithPath: "\(file)", isDirectory: false)
+  let fileName = fileUrl.deletingPathExtension().lastPathComponent
+
+  let snapshotDirectoryUrl = snapshotDirectory.map { URL(fileURLWithPath: $0, isDirectory: true) }
+  ?? fileUrl
+    .deletingLastPathComponent()
+    .appendingPathComponent("__Snapshots__")
+    .appendingPathComponent(fileName)
+
+  let identifier: String
+  if let name = name {
+    identifier = sanitizePathComponent(name)
+  } else {
+    identifier = String(await counter.count(for: snapshotDirectoryUrl.appendingPathComponent(testName)))
+  }
+
+  let testName = sanitizePathComponent(testName)
+  let snapshotFileUrl = snapshotDirectoryUrl
+    .appendingPathComponent("\(testName).\(identifier)")
+    .appendingPathExtension(pathExtension ?? "")
+  let fileManager = FileManager.default
+  try fileManager.createDirectory(at: snapshotDirectoryUrl, withIntermediateDirectories: true)
+  return (fileManager, snapshotFileUrl, fileName)
+}
+
+private enum Wrapper<Format> {
+  struct Aggregate {
+    var diffable: Format
+    let fileManager: FileManager
+    let snapshotFileUrl: URL
+    let fileName: String
+  }
+  case diffable(Format)
+  case setup(FileManager, URL, String)
+}
+
 @available(iOS 13.0.0, tvOS 13.0.0, *)
 public func verifySnapshotAsync<Value, Format>(
   matching value: @escaping @autoclosure () throws -> Value,
@@ -397,85 +435,77 @@ async throws -> String? {
   let recording = recording || isRecording
 
   do {
-    let fileUrl = URL(fileURLWithPath: "\(file)", isDirectory: false)
-    let fileName = fileUrl.deletingPathExtension().lastPathComponent
 
-    let snapshotDirectoryUrl = snapshotDirectory.map { URL(fileURLWithPath: $0, isDirectory: true) }
-    ?? fileUrl
-      .deletingLastPathComponent()
-      .appendingPathComponent("__Snapshots__")
-      .appendingPathComponent(fileName)
+    var wrapper = try await withThrowingTaskGroup(of: Wrapper<Format>.self) { group -> Wrapper.Aggregate in
+      group.addTask {
+        let (fileManager, snapshotFileUrl, fileName) = try await makeSnapshotDir(file: file, snapshotDirectory: snapshotDirectory, name: name, testName: testName, pathExtension: snapshotting.pathExtension)
+        return .setup(fileManager, snapshotFileUrl, fileName)
+      }
 
-    let identifier: String
-    if let name = name {
-      identifier = sanitizePathComponent(name)
-    } else {
-      identifier = String(await counter.count(for: snapshotDirectoryUrl.appendingPathComponent(testName)))
-    }
+      group.addTask {
+        let format: Format = try await snapshotting.snapshotAsync(try value())
+        return .diffable(format)
+      }
 
-    let testName = sanitizePathComponent(testName)
-    let snapshotFileUrl = snapshotDirectoryUrl
-      .appendingPathComponent("\(testName).\(identifier)")
-      .appendingPathExtension(snapshotting.pathExtension ?? "")
-    let fileManager = FileManager.default
-    try fileManager.createDirectory(at: snapshotDirectoryUrl, withIntermediateDirectories: true)
+      var _format: Format!
+      var _fileManager: FileManager!
+      var _url: URL!
+      var _path: String!
 
-
-    var diffable: Format = try await withCheckedThrowingContinuation { continuation in
-      DispatchQueue.main.async {
-        do {
-
-          let value = try value()
-          snapshotting.snapshot(value).run { b in
-            continuation.resume(returning: b)
-          }
-        } catch {
-          continuation.resume(throwing: error)
+      for try await value in group {
+        switch value {
+        case .diffable(let format):
+          _format = format
+        case let .setup(fileManager, url, fileName):
+          _fileManager = fileManager
+          _url = url
+          _path = fileName
         }
       }
+
+      return .init(diffable: _format!, fileManager: _fileManager, snapshotFileUrl: _url, fileName: _path)
     }
 
-
-    guard !recording, fileManager.fileExists(atPath: snapshotFileUrl.path) else {
-      try snapshotting.diffing.toData(diffable).write(to: snapshotFileUrl)
+    guard !recording, wrapper.fileManager.fileExists(atPath: wrapper.snapshotFileUrl.path) else {
+      try snapshotting.diffing.toData(wrapper.diffable).write(to: wrapper.snapshotFileUrl)
       return recording
       ? """
             Record mode is on. Turn record mode off and re-run "\(testName)" to test against the newly-recorded snapshot.
 
-            open "\(snapshotFileUrl.path)"
+            open "\(wrapper.snapshotFileUrl.path)"
 
             Recorded snapshot: …
             """
       : """
             No reference was found on disk. Automatically recorded snapshot: …
 
-            open "\(snapshotFileUrl.path)"
+            open "\(wrapper.snapshotFileUrl.path)"
 
             Re-run "\(testName)" to test against the newly-recorded snapshot.
             """
     }
 
-    let data = try Data(contentsOf: snapshotFileUrl)
+    let data = try Data(contentsOf: wrapper.snapshotFileUrl)
     let reference = snapshotting.diffing.fromData(data)
 
 #if os(iOS) || os(tvOS)
     // If the image generation fails for the diffable part use the reference
-    if let localDiff = diffable as? UIImage, localDiff.size == .zero {
-      diffable = reference
+    if let localDiff = wrapper.diffable as? UIImage, localDiff.size == .zero {
+      wrapper.diffable = reference
     }
 #endif
 
-    guard let (failure, attachments) = snapshotting.diffing.diff(reference, diffable) else {
+    guard let (failure, attachments) = snapshotting.diffing.diff(reference, wrapper.diffable) else {
       return nil
     }
 
     let artifactsUrl = URL(
       fileURLWithPath: ProcessInfo.processInfo.environment["SNAPSHOT_ARTIFACTS"] ?? NSTemporaryDirectory(), isDirectory: true
     )
-    let artifactsSubUrl = artifactsUrl.appendingPathComponent(fileName)
-    try fileManager.createDirectory(at: artifactsSubUrl, withIntermediateDirectories: true)
-    let failedSnapshotFileUrl = artifactsSubUrl.appendingPathComponent(snapshotFileUrl.lastPathComponent)
-    try snapshotting.diffing.toData(diffable).write(to: failedSnapshotFileUrl)
+    let artifactsSubUrl = artifactsUrl.appendingPathComponent(wrapper.fileName)
+    try wrapper.fileManager.createDirectory(at: artifactsSubUrl, withIntermediateDirectories: true)
+    let failedSnapshotFileUrl = artifactsSubUrl.appendingPathComponent(wrapper.snapshotFileUrl.lastPathComponent)
+    try snapshotting.diffing.toData(wrapper.diffable).write(to: failedSnapshotFileUrl)
 
     if !attachments.isEmpty {
 #if !os(Linux)
@@ -493,8 +523,8 @@ async throws -> String? {
     }
 
     let diffMessage = diffTool
-      .map { "\($0) \"\(snapshotFileUrl.path)\" \"\(failedSnapshotFileUrl.path)\"" }
-    ?? "@\(minus)\n\"\(snapshotFileUrl.path)\"\n@\(plus)\n\"\(failedSnapshotFileUrl.path)\""
+      .map { "\($0) \"\(wrapper.snapshotFileUrl.path)\" \"\(failedSnapshotFileUrl.path)\"" }
+    ?? "@\(minus)\n\"\(wrapper.snapshotFileUrl.path)\"\n@\(plus)\n\"\(failedSnapshotFileUrl.path)\""
     return """
       Snapshot does not match reference.
 
@@ -523,8 +553,9 @@ fileprivate final actor Counter {
       counterMap[url] = newCount
       return newCount
     } else {
-      counterMap[url] = 1
-      return 0
+      let newCount = 1
+      counterMap[url] = newCount
+      return newCount
     }
   }
 }
