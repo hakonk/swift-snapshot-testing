@@ -13,16 +13,10 @@ public struct Snapshotting<Value, Format> {
   public var snapshot: (Value) -> Async<Format>
 
   @MainActor
-  func snapshotAsync(_ value: @autoclosure () throws -> Value) async throws -> Format {
-    try await withCheckedThrowingContinuation { continuation in
-      do {
-
-        let value = try value()
-        snapshot(value).run { b in
-          continuation.resume(returning: b)
-        }
-      } catch {
-        continuation.resume(throwing: error)
+  func snapshotAsync(_ value: Value) async -> Format {
+    await withCheckedContinuation { continuation in
+      snapshot(value).run { b in
+        continuation.resume(returning: b)
       }
     }
   }
